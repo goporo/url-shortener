@@ -273,6 +273,11 @@ func main() {
 	r.DELETE("/urls/:shortCode", deleteShortURL) // Delete a shortened URL
 	r.GET("/urls/:shortCode/stats", getURLStats) // Get stats for a shortened URL
 
+	// return hello world for / route
+	r.GET("/", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"message": "Hello, World!"})
+	})
+
 	log.Println("Server is running on port", port)
 	r.Run(":" + port)
 }
