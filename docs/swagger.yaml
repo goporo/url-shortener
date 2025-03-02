@@ -1,0 +1,201 @@
+swagger: "2.0"
+info:
+  title: URL Shortener API
+  description: API for shortening URLs, managing redirects, and tracking statistics
+  version: 1.0.0
+  contact:
+    name: API Support
+    email: support@urlshortener.com
+host: localhost:8080
+basePath: /
+schemes:
+  - http
+consumes:
+  - application/json
+produces:
+  - application/json
+
+paths:
+  /urls:
+    get:
+      summary: Get all shortened URLs
+      description: Returns a list of all shortened URLs created within the last 7 days
+      operationId: getAllShortURLs
+      tags:
+        - urls
+      responses:
+        "200":
+          description: Successful operation
+          schema:
+            type: array
+            items:
+              $ref: "#/definitions/URL"
+        "500":
+          description: Database error
+          schema:
+            $ref: "#/definitions/ErrorResponse"
+    post:
+      summary: Create a new short URL
+      description: Creates a new shortened URL for the provided original URL
+      operationId: createShortURL
+      tags:
+        - urls
+      parameters:
+        - name: body
+          in: body
+          description: URL to be shortened
+          required: true
+          schema:
+            type: object
+            required:
+              - url
+            properties:
+              url:
+                type: string
+                example: https://example.com/very/long/url/path
+      responses:
+        "201":
+          description: URL successfully shortened
+          schema:
+            $ref: "#/definitions/URL"
+        "400":
+          description: Invalid request body
+          schema:
+            $ref: "#/definitions/ErrorResponse"
+        "500":
+          description: Failed to store URL
+          schema:
+            $ref: "#/definitions/ErrorResponse"
+
+  /urls/{shortCode}:
+    get:
+      summary: Redirect to original URL
+      description: Redirects to the original URL associated with the short code
+      operationId: getOriginalURL
+      tags:
+        - urls
+      parameters:
+        - name: shortCode
+          in: path
+          description: Short code of the URL
+          required: true
+          type: string
+      responses:
+        "302":
+          description: Redirect to original URL
+        "404":
+          description: Short URL not found
+    put:
+      summary: Update a short URL
+      description: Updates the original URL for an existing short code
+      operationId: updateShortURL
+      tags:
+        - urls
+      parameters:
+        - name: shortCode
+          in: path
+          description: Short code of the URL to update
+          required: true
+          type: string
+        - name: body
+          in: body
+          description: New URL
+          required: true
+          schema:
+            type: object
+            required:
+              - url
+            properties:
+              url:
+                type: string
+                example: https://example.com/new/url/path
+      responses:
+        "200":
+          description: URL updated successfully
+          schema:
+            type: object
+            properties:
+              message:
+                type: string
+        "400":
+          description: Invalid request body
+          schema:
+            $ref: "#/definitions/ErrorResponse"
+        "404":
+          description: Short URL not found
+          schema:
+            $ref: "#/definitions/ErrorResponse"
+    delete:
+      summary: Delete a short URL
+      description: Deletes a shortened URL by its short code
+      operationId: deleteShortURL
+      tags:
+        - urls
+      parameters:
+        - name: shortCode
+          in: path
+          description: Short code of the URL to delete
+          required: true
+          type: string
+      responses:
+        "200":
+          description: URL deleted successfully
+          schema:
+            type: object
+            properties:
+              message:
+                type: string
+        "404":
+          description: Short URL not found
+          schema:
+            $ref: "#/definitions/ErrorResponse"
+
+  /urls/{shortCode}/stats:
+    get:
+      summary: Get URL statistics
+      description: Returns statistics for a shortened URL
+      operationId: getURLStats
+      tags:
+        - urls
+      parameters:
+        - name: shortCode
+          in: path
+          description: Short code of the URL
+          required: true
+          type: string
+      responses:
+        "200":
+          description: Successful operation
+          schema:
+            $ref: "#/definitions/URL"
+        "404":
+          description: Short URL not found
+          schema:
+            $ref: "#/definitions/ErrorResponse"
+
+definitions:
+  URL:
+    type: object
+    properties:
+      id:
+        type: integer
+        format: int64
+      original:
+        type: string
+      shortCode:
+        type: string
+      createdAt:
+        type: string
+        format: date-time
+      updatedAt:
+        type: string
+        format: date-time
+      accessCount:
+        type: integer
+        format: int64
+
+  ErrorResponse:
+    type: object
+    properties:
+      error:
+        type: string
