@@ -1,33 +1,25 @@
 package main
 
 import (
-	"database/sql"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"time"
 	"url-shortener/config"
+	"url-shortener/db"
 	"url-shortener/middleware"
+	"url-shortener/models"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
-	_ "github.com/mattn/go-sqlite3"
 )
 
 const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
-type URL struct {
-	ID          int       `json:"id"`
-	Original    string    `json:"original"`
-	ShortCode   string    `json:"shortCode"`
-	CreatedAt   time.Time `json:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt"`
-	AccessCount int       `json:"accessCount"`
-}
-
-var db *sql.DB
+// Use the database struct from our db package
+var database *db.Database
 
 func base62Encode(num int) string {
 	encoded := ""
@@ -40,9 +32,8 @@ func base62Encode(num int) string {
 }
 
 func generateShortCode() string {
-	var lastID int
-	db.QueryRow("SELECT MAX(id) FROM urls").Scan(&lastID)
-	return base62Encode(lastID + 1)
+	timestamp := time.Now().UnixNano()
+	return base62Encode(int(timestamp % 100000000))
 }
 
 func createShortURL(c *gin.Context) {
@@ -57,56 +48,33 @@ func createShortURL(c *gin.Context) {
 	shortCode := generateShortCode()
 	timestamp := time.Now()
 
-	stmt, err := db.Prepare("INSERT INTO urls (original, short_code, created_at, updated_at, access_count) VALUES (?, ?, ?, ?, 0)")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
-		return
+	url := models.URL{
+		Original:    request.URL,
+		ShortCode:   shortCode,
+		CreatedAt:   timestamp,
+		UpdatedAt:   timestamp,
+		AccessCount: 0,
 	}
-	defer stmt.Close()
 
-	_, err = stmt.Exec(request.URL, shortCode, timestamp, timestamp)
+	// Use the database package to create the short URL
+	err := database.CreateShortURL(url.Original, url.ShortCode)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to store URL"})
 		return
 	}
 
-	cleanUpOldURLs()
+	// We no longer need to call cleanUpOldURLs as that would be handled by the db package
 
-	c.JSON(http.StatusCreated, gin.H{
-		"original":  request.URL,
-		"shortCode": shortCode,
-		"createdAt": timestamp,
-		"updatedAt": timestamp,
-	})
-}
-
-func cleanUpOldURLs() {
-	limit := 100
-
-	var count int
-	err := db.QueryRow("SELECT COUNT(*) FROM urls").Scan(&count)
-	if err != nil {
-		log.Println("Failed to count URLs:", err)
-		return
-	}
-
-	if count > limit {
-		_, err := db.Exec("DELETE FROM urls WHERE id IN (SELECT id FROM urls ORDER BY created_at ASC LIMIT ?)", count-100)
-		if err != nil {
-			log.Println("Failed to clean up old URLs:", err)
-		}
-	}
+	c.JSON(http.StatusCreated, url)
 }
 
 func getOriginalURL(c *gin.Context) {
 	fmt.Println("getOriginalURL")
 
 	shortCode := c.Param("shortCode")
-	var url URL
 
-	err := db.QueryRow("SELECT id, original, short_code, created_at, updated_at, access_count FROM urls WHERE short_code = ?", shortCode).
-		Scan(&url.ID, &url.Original, &url.ShortCode, &url.CreatedAt, &url.UpdatedAt, &url.AccessCount)
-
+	// Use the database package to get the URL by short code
+	url, err := database.GetURLByShortCode(shortCode)
 	if err != nil {
 		c.HTML(http.StatusNotFound, "notfound.html", gin.H{
 			"message": "Short URL not found",
@@ -115,13 +83,12 @@ func getOriginalURL(c *gin.Context) {
 	}
 
 	// Increment access count
-	_, err = db.Exec("UPDATE urls SET access_count = access_count + 1 WHERE short_code = ?", shortCode)
-	if err != nil {
+	if err := database.IncrementClickCount(shortCode); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update access count"})
 		return
 	}
 
-	c.Redirect(http.StatusFound, url.Original)
+	c.Redirect(http.StatusFound, url.OriginalURL)
 }
 
 func updateShortURL(c *gin.Context) {
@@ -134,21 +101,8 @@ func updateShortURL(c *gin.Context) {
 		return
 	}
 
-	stmt, err := db.Prepare("UPDATE urls SET original = ?, updated_at = ? WHERE short_code = ?")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
-		return
-	}
-	defer stmt.Close()
-
-	result, err := stmt.Exec(request.URL, time.Now(), shortCode)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update URL"})
-		return
-	}
-
-	rowsAffected, _ := result.RowsAffected()
-	if rowsAffected == 0 {
+	// Use the database package to update the URL
+	if err := database.UpdateURL(shortCode, request.URL); err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Short URL not found"})
 		return
 	}
@@ -159,21 +113,8 @@ func updateShortURL(c *gin.Context) {
 func deleteShortURL(c *gin.Context) {
 	shortCode := c.Param("shortCode")
 
-	stmt, err := db.Prepare("DELETE FROM urls WHERE short_code = ?")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
-		return
-	}
-	defer stmt.Close()
-
-	result, err := stmt.Exec(shortCode)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete URL"})
-		return
-	}
-
-	rowsAffected, _ := result.RowsAffected()
-	if rowsAffected == 0 {
+	// Use the database package to delete the URL
+	if err := database.DeleteURL(shortCode); err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Short URL not found"})
 		return
 	}
@@ -183,38 +124,53 @@ func deleteShortURL(c *gin.Context) {
 
 func getURLStats(c *gin.Context) {
 	shortCode := c.Param("shortCode")
-	var url URL
 
-	err := db.QueryRow("SELECT id, original, short_code, created_at, updated_at, access_count FROM urls WHERE short_code = ?", shortCode).
-		Scan(&url.ID, &url.Original, &url.ShortCode, &url.CreatedAt, &url.UpdatedAt, &url.AccessCount)
+	// Use the database package to get the URL stats
+	url, err := database.GetURLByShortCode(shortCode)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Short URL not found"})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"original":    url.Original,
-		"shortCode":   url.ShortCode,
-		"createdAt":   url.CreatedAt,
-		"updatedAt":   url.UpdatedAt,
-		"accessCount": url.AccessCount,
-	})
+	// Convert db.URL to models.URL if needed
+	urlStats := models.URL{
+		ID:          url.ID,
+		Original:    url.OriginalURL,
+		ShortCode:   url.ShortCode,
+		CreatedAt:   parseTime(url.CreatedAt),
+		UpdatedAt:   parseTime(url.UpdatedAt),
+		AccessCount: url.Clicks,
+	}
+
+	c.JSON(http.StatusOK, urlStats)
+}
+
+// Helper function to parse time strings
+func parseTime(timeStr string) time.Time {
+	t, err := time.Parse(time.RFC3339, timeStr)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
 }
 
 func getAllShortURLs(c *gin.Context) {
-	rows, err := db.Query("SELECT id, original, short_code, created_at, updated_at, access_count FROM urls ORDER BY updated_at DESC LIMIT 7")
+	urlRecords, err := database.GetAllURLs(7)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
 		return
 	}
-	defer rows.Close()
 
-	var urls []URL
-	for rows.Next() {
-		var url URL
-		if err := rows.Scan(&url.ID, &url.Original, &url.ShortCode, &url.CreatedAt, &url.UpdatedAt, &url.AccessCount); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to scan URL"})
-			return
+	urls := []models.URL{}
+
+	for _, record := range urlRecords {
+		url := models.URL{
+			ID:          record.ID,
+			Original:    record.OriginalURL,
+			ShortCode:   record.ShortCode,
+			CreatedAt:   parseTime(record.CreatedAt),
+			UpdatedAt:   parseTime(record.UpdatedAt),
+			AccessCount: record.Clicks,
 		}
 		urls = append(urls, url)
 	}
@@ -225,37 +181,28 @@ func getAllShortURLs(c *gin.Context) {
 func main() {
 	var err error
 
-	err = godotenv.Load()
-	if err != nil {
-		log.Fatal("Error loading .env file")
+	if err = godotenv.Load(); err != nil {
+		log.Println("Warning: .env file not found, using environment variables")
 	}
 
 	port := os.Getenv("PORT")
-
-	db, err = sql.Open("sqlite3", "urls.db")
-	if err != nil {
-		log.Fatal(err)
+	if port == "" {
+		port = "8080"
 	}
 
-	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS urls (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        original TEXT NOT NULL,
-        short_code TEXT NOT NULL UNIQUE,
-        created_at DATETIME NOT NULL,
-        updated_at DATETIME NOT NULL,
-        access_count INTEGER DEFAULT 0
-    )`)
+	// Initialize database connection using our db package
+	database, err = db.InitDB()
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("Failed to initialize database: %v", err)
 	}
+	defer database.Close()
 
-	// Load configuration
+	log.Println("Successfully connected to PostgreSQL database")
+
 	cfg := config.GetDefaultConfig()
 
-	// Initialize router
 	r := gin.Default()
 
-	// Apply middleware
 	if cfg.RateLimit.Enabled {
 		rateLimiter := middleware.NewRateLimitMiddleware(cfg.RateLimit.RequestsPerMinute)
 		r.Use(rateLimiter.Limit)
@@ -265,17 +212,15 @@ func main() {
 
 	r.LoadHTMLGlob("templates/*")
 
-	// Routes
-	r.GET("/urls", getAllShortURLs)              // Get all shortened URLs
-	r.POST("/urls", createShortURL)              // Create a new shortened URL
-	r.GET("/urls/:shortCode", getOriginalURL)    // Redirect to the original URL
-	r.PUT("/urls/:shortCode", updateShortURL)    // Update a shortened URL
-	r.DELETE("/urls/:shortCode", deleteShortURL) // Delete a shortened URL
-	r.GET("/urls/:shortCode/stats", getURLStats) // Get stats for a shortened URL
+	r.GET("/urls", getAllShortURLs)
+	r.POST("/urls", createShortURL)
+	r.GET("/urls/:shortCode", getOriginalURL)
+	r.PUT("/urls/:shortCode", updateShortURL)
+	r.DELETE("/urls/:shortCode", deleteShortURL)
+	r.GET("/urls/:shortCode/stats", getURLStats)
 
-	// return hello world for / route
 	r.GET("/", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"message": "Hello, World!"})
+		c.JSON(http.StatusOK, gin.H{"message": "URL Shortener API"})
 	})
 
 	log.Println("Server is running on port", port)
