@@ -19,16 +19,8 @@ import (
 	ginSwagger "github.com/swaggo/gin-swagger"
 )
 
-// @title URL Shortener API
-// @version 1.0
-// @description API for shortening URLs, managing redirects, and tracking statistics
-// @host localhost:8080
-// @BasePath /
-// @schemes http
-
 const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
-// Use the database struct from our db package
 var database *db.Database
 
 func base62Encode(num int) string {
@@ -46,17 +38,6 @@ func generateShortCode() string {
 	return base62Encode(int(timestamp % 100000000))
 }
 
-// @Summary Create a new short URL
-// @Description Creates a new shortened URL for the provided original URL
-// @ID createShortURL
-// @Accept json
-// @Produce json
-// @Param body body object true "URL to be shortened"
-// @Success 201 {object} models.URL
-// @Failure 400 {object} object{error=string}
-// @Failure 500 {object} object{error=string}
-// @Router /urls [post]
-// @Tags urls
 func createShortURL(c *gin.Context) {
 	var request struct {
 		URL string `json:"url"`
@@ -77,32 +58,20 @@ func createShortURL(c *gin.Context) {
 		AccessCount: 0,
 	}
 
-	// Use the database package to create the short URL
 	err := database.CreateShortURL(url.Original, url.ShortCode)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to store URL"})
 		return
 	}
 
-	// We no longer need to call cleanUpOldURLs as that would be handled by the db package
-
 	c.JSON(http.StatusCreated, url)
 }
 
-// @Summary Redirect to original URL
-// @Description Redirects to the original URL associated with the short code
-// @ID getOriginalURL
-// @Param shortCode path string true "Short code of the URL"
-// @Success 302 "Redirect to original URL"
-// @Failure 404 "Short URL not found"
-// @Router /urls/{shortCode} [get]
-// @Tags urls
 func getOriginalURL(c *gin.Context) {
 	fmt.Println("getOriginalURL")
 
 	shortCode := c.Param("shortCode")
 
-	// Use the database package to get the URL by short code
 	url, err := database.GetURLByShortCode(shortCode)
 	if err != nil {
 		c.HTML(http.StatusNotFound, "notfound.html", gin.H{
@@ -120,18 +89,6 @@ func getOriginalURL(c *gin.Context) {
 	c.Redirect(http.StatusFound, url.OriginalURL)
 }
 
-// @Summary Update a short URL
-// @Description Updates the original URL for an existing short code
-// @ID updateShortURL
-// @Accept json
-// @Produce json
-// @Param shortCode path string true "Short code of the URL to update"
-// @Param body body object true "New URL"
-// @Success 200 {object} object{message=string}
-// @Failure 400 {object} object{error=string}
-// @Failure 404 {object} object{error=string}
-// @Router /urls/{shortCode} [put]
-// @Tags urls
 func updateShortURL(c *gin.Context) {
 	shortCode := c.Param("shortCode")
 	var request struct {
@@ -142,7 +99,6 @@ func updateShortURL(c *gin.Context) {
 		return
 	}
 
-	// Use the database package to update the URL
 	if err := database.UpdateURL(shortCode, request.URL); err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Short URL not found"})
 		return
@@ -151,19 +107,9 @@ func updateShortURL(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "URL updated successfully"})
 }
 
-// @Summary Delete a short URL
-// @Description Deletes a shortened URL by its short code
-// @ID deleteShortURL
-// @Produce json
-// @Param shortCode path string true "Short code of the URL to delete"
-// @Success 200 {object} object{message=string}
-// @Failure 404 {object} object{error=string}
-// @Router /urls/{shortCode} [delete]
-// @Tags urls
 func deleteShortURL(c *gin.Context) {
 	shortCode := c.Param("shortCode")
 
-	// Use the database package to delete the URL
 	if err := database.DeleteURL(shortCode); err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Short URL not found"})
 		return
@@ -172,26 +118,15 @@ func deleteShortURL(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "URL deleted successfully"})
 }
 
-// @Summary Get URL statistics
-// @Description Returns statistics for a shortened URL
-// @ID getURLStats
-// @Produce json
-// @Param shortCode path string true "Short code of the URL"
-// @Success 200 {object} models.URL
-// @Failure 404 {object} object{error=string}
-// @Router /urls/{shortCode}/stats [get]
-// @Tags urls
 func getURLStats(c *gin.Context) {
 	shortCode := c.Param("shortCode")
 
-	// Use the database package to get the URL stats
 	url, err := database.GetURLByShortCode(shortCode)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Short URL not found"})
 		return
 	}
 
-	// Convert db.URL to models.URL if needed
 	urlStats := models.URL{
 		ID:          url.ID,
 		Original:    url.OriginalURL,
@@ -204,7 +139,6 @@ func getURLStats(c *gin.Context) {
 	c.JSON(http.StatusOK, urlStats)
 }
 
-// Helper function to parse time strings
 func parseTime(timeStr string) time.Time {
 	t, err := time.Parse(time.RFC3339, timeStr)
 	if err != nil {
@@ -213,14 +147,6 @@ func parseTime(timeStr string) time.Time {
 	return t
 }
 
-// @Summary Get all shortened URLs
-// @Description Returns a list of all shortened URLs created within the last 7 days
-// @ID getAllShortURLs
-// @Produce json
-// @Success 200 {array} models.URL
-// @Failure 500 {object} object{error=string}
-// @Router /urls [get]
-// @Tags urls
 func getAllShortURLs(c *gin.Context) {
 	urlRecords, err := database.GetAllURLs(7)
 	if err != nil {
@@ -257,7 +183,6 @@ func main() {
 		port = "8080"
 	}
 
-	// Initialize database connection using our db package
 	database, err = db.InitDB()
 	if err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
@@ -279,7 +204,6 @@ func main() {
 
 	r.LoadHTMLGlob("templates/*")
 
-	// Add Swagger documentation route
 	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
 	r.GET("/urls", getAllShortURLs)

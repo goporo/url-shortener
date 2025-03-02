@@ -21,23 +21,20 @@ type bucket struct {
 	lastRefil time.Time
 }
 
-// NewRateLimiter creates a new rate limiter
 func NewRateLimiter(rate int, interval time.Duration, maxTokens int) *RateLimiter {
 	limiter := &RateLimiter{
 		tokens:       make(map[string]*bucket),
 		rate:         rate,
 		interval:     interval,
 		maxTokens:    maxTokens,
-		cleanupAfter: time.Hour, // clean up buckets after 1 hour of inactivity
+		cleanupAfter: time.Hour,
 	}
 
-	// Start cleanup routine
 	go limiter.cleanup()
 
 	return limiter
 }
 
-// Allow checks if the given key can perform an action
 func (rl *RateLimiter) Allow(key string) bool {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
@@ -46,19 +43,16 @@ func (rl *RateLimiter) Allow(key string) bool {
 	b, exists := rl.tokens[key]
 
 	if !exists {
-		// Create new bucket for this key
 		rl.tokens[key] = &bucket{
-			tokens:    rl.maxTokens - 1, // Use one token immediately
+			tokens:    rl.maxTokens - 1,
 			lastSeen:  now,
 			lastRefil: now,
 		}
 		return true
 	}
 
-	// Update last seen time
 	b.lastSeen = now
 
-	// Check if we should refill tokens
 	elapsed := now.Sub(b.lastRefil)
 	tokensToAdd := int(elapsed/rl.interval) * rl.rate
 
@@ -67,7 +61,6 @@ func (rl *RateLimiter) Allow(key string) bool {
 		b.lastRefil = now
 	}
 
-	// Check if we have tokens available
 	if b.tokens > 0 {
 		b.tokens--
 		return true
@@ -76,7 +69,6 @@ func (rl *RateLimiter) Allow(key string) bool {
 	return false
 }
 
-// RemainingTokens returns the number of tokens remaining for a key
 func (rl *RateLimiter) RemainingTokens(key string) int {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
@@ -93,7 +85,6 @@ func (rl *RateLimiter) RemainingTokens(key string) int {
 	return min(b.tokens+tokensToAdd, rl.maxTokens)
 }
 
-// NextAvailable returns the duration until the next token becomes available
 func (rl *RateLimiter) NextAvailable(key string) time.Duration {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
@@ -103,7 +94,6 @@ func (rl *RateLimiter) NextAvailable(key string) time.Duration {
 		return 0
 	}
 
-	// Calculate time until next token
 	now := time.Now()
 	elapsed := now.Sub(b.lastRefil)
 	remaining := rl.interval - (elapsed % rl.interval)

@@ -4,7 +4,6 @@ import (
 	"time"
 )
 
-// URL represents a shortened URL entry in the database
 type URL struct {
 	ID          int       `json:"id"`
 	Original    string    `json:"original"`
