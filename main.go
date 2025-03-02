@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"os"
 	"time"
+	"url-shortener/config"
+	"url-shortener/middleware"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -247,7 +249,17 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// Load configuration
+	cfg := config.GetDefaultConfig()
+
+	// Initialize router
 	r := gin.Default()
+
+	// Apply middleware
+	if cfg.RateLimit.Enabled {
+		rateLimiter := middleware.NewRateLimitMiddleware(cfg.RateLimit.RequestsPerMinute)
+		r.Use(rateLimiter.Limit)
+	}
 
 	r.Use(cors.Default())
 
